@@ -33,7 +33,7 @@ def setup_logger(log_level=logging.DEBUG, log_file="./logs/app.log"):
         console_handler.setFormatter(logging.Formatter(log_format))
 
         # 文件日志处理器
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
         file_handler.setFormatter(logging.Formatter(log_format))
 
         # 添加处理器

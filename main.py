@@ -3,19 +3,15 @@ import glob
 import io
 import logging
 import os
-import pathlib
 import sys
-import tkinter as tk
-from tkinter import filedialog
+import traceback
 
 import magic
-import mutagen
+from mutagen import File # type: ignore[attr-defined]
+from mutagen.easyid3 import ID3 # type: ignore[attr-defined]
 from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad
 from dotenv import load_dotenv
-from mutagen.easyid3 import ID3
-from wasmer import Instance, Int32Array, Module, Store, Uint8Array, engine
-from wasmer_compiler_cranelift import Compiler
+from wasmtime import Store, Module, Instance, Engine
 
 from logging_config import setup_logger
 
@@ -47,6 +43,50 @@ class XMInfo:
         return bytes.fromhex(self.encodedby)
 
 
+class WasmDecryptor:
+    def __init__(self, wasm_path="./xm_encryptor.wasm"):
+        logger.info("Loading XM Decryptor Module...")
+        self.engine = Engine()
+        self.module = Module.from_file(self.engine, wasm_path)
+
+    def decrypt(self, de_data: bytes, track_id: bytes) -> str:
+        store = Store(self.engine)
+        instance = Instance(store, self.module, [])
+        exports = instance.exports(store)
+
+        a = exports["a"]
+        c = exports["c"]
+        g = exports["g"]
+        memory_i = exports["i"]
+
+        stack_pointer = a(store, -16) # type: ignore
+        de_data_offset = c(store, len(de_data)) # type: ignore
+        track_id_offset = c(store, len(track_id)) # type: ignore
+        
+        memory_i.write(store, de_data, de_data_offset) # type: ignore
+        memory_i.write(store, track_id, track_id_offset) # type: ignore        
+        g(
+            store,
+            stack_pointer,
+            de_data_offset,
+            len(de_data),
+            track_id_offset,
+            len(track_id),
+        ) # type: ignore
+
+        res_mem = memory_i.read(store, stack_pointer, stack_pointer + 8) # type: ignore
+        result_pointer = int.from_bytes(res_mem[0:4], "little")
+        result_length = int.from_bytes(res_mem[4:8], "little")
+
+        return memory_i.read( # type: ignore
+            store, result_pointer, result_pointer + result_length
+        ).decode()
+
+
+# Global instance
+wasm_decryptor = None
+
+
 def get_str(x):
     if x is None:
         return ""
@@ -73,13 +113,14 @@ def get_xm_info(data: bytes):
         id3value.album = str(id3["TALB"])
         id3value.artist = str(id3["TPE1"])
         id3value.tracknumber = int(str(id3["TRCK"]))
-        id3value.ISRC = "" if id3.get("TSRC") is None else str(id3["TSRC"])
+        id3value.ISRC = "" if id3.get("TSRC") is None else str(id3["TSRC"]) # type: ignore   
         id3value.encodedby = "" if id3.get("TENC") is None else str(id3["TENC"])
         id3value.size = int(str(id3["TSIZ"]))
         id3value.header_size = id3.size
         id3value.encoding_technology = str(id3["TSSE"])
         logger.info(
-            f"解析ID3信息成功，标题: {id3value.title}, 专辑: {id3value.album}, 艺术家: {id3value.artist}"
+            f"解析ID3信息成功，标题: {id3value.title}, "
+            f"专辑: {id3value.album}, 艺术家: {id3value.artist}"
         )
         return id3value
     except Exception as e:
@@ -101,19 +142,16 @@ def get_printable_bytes(x: bytes):
 
 
 def xm_decrypt(raw_data):
+    global wasm_decryptor
     try:
-        logger.info("加载 XM 解密模块")
-        xm_encryptor = Instance(
-            Module(
-                Store(engine.Universal(Compiler)),
-                pathlib.Path("./xm_encryptor.wasm").read_bytes(),
-            )
-        )
+        if wasm_decryptor is None:
+            wasm_decryptor = WasmDecryptor()
+
         xm_info = get_xm_info(raw_data)
         logger.info(f"解密文件，ID3头大小: {hex(xm_info.header_size)}")
 
         encrypted_data = raw_data[
-            xm_info.header_size : xm_info.header_size + xm_info.size :
+            xm_info.header_size : xm_info.header_size + xm_info.size
         ]
 
         # 使用环境变量中的解密密钥
@@ -122,36 +160,16 @@ def xm_decrypt(raw_data):
         de_data = get_printable_bytes(de_data)
 
         track_id = str(xm_info.tracknumber).encode()
-        stack_pointer = xm_encryptor.exports.a(-16)
-        de_data_offset = xm_encryptor.exports.c(len(de_data))
-        track_id_offset = xm_encryptor.exports.c(len(track_id))
 
-        memory_i = xm_encryptor.exports.i
-        memview_unit8: Uint8Array = memory_i.uint8_view(offset=de_data_offset)
-        for i, b in enumerate(de_data):
-            memview_unit8[i] = b
+        result_data = wasm_decryptor.decrypt(de_data, track_id)
 
-        memview_unit8: Uint8Array = memory_i.uint8_view(offset=track_id_offset)
-        for i, b in enumerate(track_id):
-            memview_unit8[i] = b
-
-        xm_encryptor.exports.g(
-            stack_pointer, de_data_offset, len(de_data), track_id_offset, len(track_id)
-        )
-
-        memview_int32: Int32Array = memory_i.int32_view(offset=stack_pointer // 4)
-        result_pointer = memview_int32[0]
-        result_length = memview_int32[1]
-
-        result_data = bytearray(memory_i.buffer)[
-            result_pointer : result_pointer + result_length
-        ].decode()
         decrypted_data = base64.b64decode(xm_info.encoding_technology + result_data)
         final_data = decrypted_data + raw_data[xm_info.header_size + xm_info.size :]
         logger.info("解密成功")
         return xm_info, final_data
     except Exception as e:
         logger.error(f"解密失败: {str(e)}")
+        logger.error(traceback.format_exc())
         raise
 
 
@@ -175,15 +193,18 @@ def decrypt_xm_file(from_file):
         data = read_file(from_file)
         info, audio_data = xm_decrypt(data)
         output_dir = f"{OUTPUT_PATH}/{replace_invalid_chars(info.album)}"
-        output = f"{output_dir}/{replace_invalid_chars(info.title)}.{find_ext(audio_data[:0xff])}"
+        file_name = os.path.splitext(os.path.basename(from_file))[0]
+        ext = find_ext(audio_data[:0xFF])
+        output = f"{output_dir}/{file_name}.{ext}"
 
         os.makedirs(output_dir, exist_ok=True)
         buffer = io.BytesIO(audio_data)
-        tags = mutagen.File(buffer, easy=True)
-        tags["title"] = info.title
-        tags["album"] = info.album
-        tags["artist"] = info.artist
-        tags.save(buffer)
+        tags = File(buffer, easy=True)
+        if tags:
+            tags["title"] = info.title
+            tags["album"] = info.album
+            tags["artist"] = info.artist
+            tags.save(buffer)
 
         with open(output, "wb") as f:
             buffer.seek(0)
@@ -202,61 +223,31 @@ def replace_invalid_chars(name):
             name = name.replace(char, " ")
     return name
 
+def main():
+    input_path = os.getenv("INPUT_PATH")
 
-def select_file():
-    root = tk.Tk()
-    root.withdraw()
-    file_path = filedialog.askopenfilename()
-    root.destroy()
-    return file_path
+    if not input_path or not os.path.isdir(input_path):
+        logger.error(f"指定的输入目录不存在或未设置: {input_path}")
+        sys.exit(1)
 
+    # 获取所有 .xm 文件，支持子目录递归
+    xm_files = glob.glob(os.path.join(input_path, "**", "*.xm"), recursive=True)
 
-def select_directory():
-    root = tk.Tk()
-    root.withdraw()
-    directory_path = filedialog.askdirectory()
-    root.destroy()
-    return directory_path
+    if not xm_files:
+        logger.warning("未在指定目录中找到 .xm 文件")
+        sys.exit(0)
+
+    logger.info(f"共找到 {len(xm_files)} 个 .xm 文件，开始解密处理...")
+
+    for file_path in xm_files:
+        try:
+            decrypt_xm_file(file_path)
+        except Exception as e:
+            logger.error(f"处理文件 {file_path} 时发生错误: {str(e)}")
+            continue
+
+    logger.info("所有文件处理完成。")
 
 
 if __name__ == "__main__":
-    while True:
-        print("欢迎使用喜马拉雅音频解密工具")
-        print("本工具仅供学习交流使用，严禁用于商业用途")
-        print("请选择您想要使用的功能：")
-        print("1. 解密单个文件")
-        print("2. 批量解密文件")
-        print("3. 退出")
-        choice = input()
-        files_to_decrypt = []
-        if choice == "1" or choice == "2":
-            if choice == "1":
-                files_to_decrypt = [select_file()]
-                if files_to_decrypt == [""]:
-                    print("检测到文件选择窗口被关闭")
-                    continue
-            elif choice == "2":
-                dir_to_decrypt = select_directory()
-                if dir_to_decrypt == "":
-                    print("检测到目录选择窗口被关闭")
-                    continue
-                files_to_decrypt = glob.glob(os.path.join(dir_to_decrypt, "*.xm"))
-            print(
-                "请选择是否需要设置输出路径：（不设置默认为本程序目录下的output文件夹）"
-            )
-            print("1. 设置输出路径")
-            print("2. 不设置输出路径")
-            choice = input()
-            if choice == "1":
-                output_path = select_directory()
-                if output_path == "":
-                    print("检测到目录选择窗口被关闭")
-                    continue
-            elif choice == "2":
-                output_path = "./output"
-            for file in files_to_decrypt:
-                decrypt_xm_file(file)
-        elif choice == "3":
-            sys.exit()
-        else:
-            print("输入错误，请重新输入！")
+    main()
