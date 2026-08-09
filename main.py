@@ -1,3 +1,22 @@
+"""喜马拉雅 XM 解密桌面与批处理入口。
+
+用途：
+  启动 Tk 桌面界面，或通过 ``--cli`` 按配置批量解密 XM 音频。
+
+配置文件：
+  默认读取项目根目录的 ``.env``；输入、输出、CloudStation 根目录和
+  文件夹关键词均可通过环境变量覆盖平台默认值。
+
+示例：
+  python main.py
+  python main.py --cli
+
+输出：
+  解密音频写入配置的输出目录，运行日志写入 ``logs/``。
+"""
+
+from __future__ import annotations
+
 import base64
 import io
 import logging
@@ -8,7 +27,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-import magic
 from mutagen import File # type: ignore[attr-defined]
 from mutagen.easyid3 import ID3 # type: ignore[attr-defined]
 from Crypto.Cipher import AES
@@ -16,14 +34,16 @@ from dotenv import load_dotenv
 from wasmtime import Store, Module, Instance, Engine
 
 from logging_config import setup_logger
+from path_config import resolve_default_paths
 
 # 加载 .env 文件
 load_dotenv()
 
-# 从环境变量获取配置
+# 从环境变量和当前操作系统获取配置
+DEFAULT_PATHS = resolve_default_paths()
 XM_KEY = os.getenv("XM_KEY", "ximalayaximalayaximalayaximalaya").encode()
-OUTPUT_PATH = os.getenv("OUTPUT_PATH", "./output")
-INPUT_PATH = os.getenv("INPUT_PATH")
+OUTPUT_PATH = DEFAULT_PATHS.output_path
+INPUT_PATH = DEFAULT_PATHS.input_path
 FOLDER_KEYWORD = os.getenv("FOLDER_KEYWORD", "").strip()
 # 引入日志配置
 logger = setup_logger(log_level=logging.INFO, log_file="./logs/xm_decrypt.log")
@@ -178,14 +198,28 @@ def xm_decrypt(raw_data):
 
 
 def find_ext(data):
+    """根据常见音频容器的文件头识别扩展名。
+
+    避免依赖 libmagic；后者在 Windows 和 macOS 上需要不同的系统组件，
+    容易导致桌面界面在启动阶段直接退出。
+    """
     try:
-        exts = ["m4a", "mp3", "flac", "wav"]
-        value = magic.from_buffer(data).lower()
-        for ext in exts:
-            if ext in value:
-                logger.info(f"识别音频格式成功: {ext}")
-                return ext
-        raise Exception(f"未知格式 {value}")
+        if data.startswith(b"fLaC"):
+            extension = "flac"
+        elif data.startswith(b"RIFF") and data[8:12] == b"WAVE":
+            extension = "wav"
+        elif len(data) >= 8 and data[4:8] == b"ftyp":
+            extension = "m4a"
+        elif data.startswith(b"ID3") or (
+            len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0
+        ):
+            extension = "mp3"
+        else:
+            header = data[:16].hex(" ") or "<空>"
+            raise ValueError(f"未知音频格式，文件头: {header}")
+
+        logger.info(f"识别音频格式成功: {extension}")
+        return extension
     except Exception as e:
         logger.error(f"识别音频格式失败: {str(e)}")
         raise
@@ -229,8 +263,10 @@ def replace_invalid_chars(name):
 
 
 def find_matching_directories(input_path, folder_keyword):
-    """查找输入目录下名称包含关键字的一级子目录。"""
+    """按关键字查找一级子目录；未提供关键字时使用整个输入目录。"""
     keyword = folder_keyword.casefold()
+    if not keyword:
+        return [Path(input_path)]
     return sorted(
         (
             path
@@ -274,8 +310,6 @@ def process_batch(
         raise ValueError(f"指定的输入目录不存在或未设置: {input_path}")
 
     keyword = folder_keyword.strip()
-    if not keyword:
-        raise ValueError("未设置文件夹关键字 FOLDER_KEYWORD")
 
     if not output_path:
         raise ValueError("未设置输出目录 OUTPUT_PATH")
@@ -291,10 +325,13 @@ def process_batch(
         )
         return BatchResult(0, 0, 0, 0)
 
-    logger.info(
-        f"共找到 {len(matching_directories)} 个匹配文件夹: "
-        + ", ".join(path.name for path in matching_directories)
-    )
+    if keyword:
+        logger.info(
+            f"共找到 {len(matching_directories)} 个匹配文件夹: "
+            + ", ".join(path.name for path in matching_directories)
+        )
+    else:
+        logger.info(f"未启用文件夹关键词筛选，将递归处理整个输入目录: {input_root}")
 
     xm_files = find_xm_files(matching_directories)
     if not xm_files:

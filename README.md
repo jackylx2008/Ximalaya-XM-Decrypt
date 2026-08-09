@@ -6,7 +6,8 @@
 
 - 提供桌面 UI，输入和输出目录支持直接输入、粘贴或通过系统资源管理器选择。
 - 后台执行批量解码，并在界面中显示实时日志；底部状态栏实时显示文件总数、处理进度和当前文件。
-- 从 `INPUT_PATH` 的一级子目录中，筛选名称包含 `FOLDER_KEYWORD` 的所有目录。
+- 可选择是否按文件夹关键词筛选；不启用筛选时递归处理整个输入目录。
+- 启用筛选时，从 `INPUT_PATH` 的一级子目录中筛选名称包含 `FOLDER_KEYWORD` 的所有目录。
 - 递归搜索命中目录内的 `.xm` 文件并批量解密。
 - 自动识别 `m4a`、`mp3`、`flac` 和 `wav` 格式。
 - 写入标题、专辑和艺术家等音频标签。
@@ -15,10 +16,25 @@
 
 ## 环境要求
 
-- Python 3.10 或更高版本
+- Python 3.9 或更高版本
 - `xm_encryptor.wasm` 位于项目根目录
 
 ## 安装
+
+推荐使用 Anaconda/Miniconda 创建隔离环境：
+
+```bash
+conda env create -f environment.yml
+conda activate ximalaya-xm-decrypt
+```
+
+如果环境已经创建，可同步环境配置：
+
+```bash
+conda env update -f environment.yml --prune
+```
+
+也可以使用 Python 自带的虚拟环境：
 
 ```bash
 python -m venv .venv
@@ -32,23 +48,51 @@ macOS/Linux 下激活虚拟环境时使用：
 source .venv/bin/activate
 ```
 
+使用 Homebrew Python 且遇到 `No module named '_tkinter'` 的 macOS 用户，还需要安装与 Python 版本对应的 Tk：
+
+```bash
+brew install python-tk@3.14
+```
+
+可以通过 `python3 --version` 查看当前 Python 版本，并相应调整公式中的版本号。
+也可以使用自带 Tk 的 macOS 系统 Python 创建虚拟环境：
+
+```bash
+/usr/bin/python3 -m venv .venv
+```
+
 ## 配置
 
 复制 `.env.example` 为 `.env`，然后修改配置：
 
 ```dotenv
 XM_KEY=ximalayaximalayaximalayaximalaya
-INPUT_PATH=D:\path\to\ximalaya-downloads
-FOLDER_KEYWORD=神探迈克狐
-OUTPUT_PATH=D:\path\to\output
+# 以下配置均为可选覆盖项
+# CLOUDSTATION_ROOT=/path/to/cloudstation
+# INPUT_PATH=/path/to/ximalaya-downloads
+# OUTPUT_PATH=/path/to/output
+FOLDER_KEYWORD=example
 ```
 
 | 配置项 | 说明 |
 | --- | --- |
 | `XM_KEY` | XM 文件的 AES 解密密钥；未设置时使用项目默认值 |
-| `INPUT_PATH` | 包含多个专辑文件夹的父目录，必填 |
-| `FOLDER_KEYWORD` | 一级子目录名称关键字，必填；匹配英文时不区分大小写 |
-| `OUTPUT_PATH` | 解密文件的根输出目录；默认为 `./output` |
+| `CLOUDSTATION_ROOT` | 可选；CloudStation 根目录，优先于平台专用变量 |
+| `CLOUDSTATION_ROOT_WINDOWS` | 可选；Windows CloudStation 根目录 |
+| `CLOUDSTATION_ROOT_MACOS` | 可选；macOS CloudStation 根目录 |
+| `CLOUDSTATION_ROOT_LINUX` | 可选；Linux CloudStation 根目录 |
+| `INPUT_PATH` | 可选；包含多个专辑文件夹的父目录，优先于平台默认值 |
+| `FOLDER_KEYWORD` | 可选；一级子目录名称关键字，匹配英文时不区分大小写；留空时处理整个输入目录 |
+| `OUTPUT_PATH` | 可选；解密文件的根输出目录，默认使用当前用户桌面 |
+
+未设置路径变量时，程序使用以下平台默认值：
+
+- macOS 输入目录：`~/SynologyDrive/有声书/ximalaya-xm/`
+- Windows 输入目录：`D:\CloudStation\有声书\ximalaya-xm\`
+- macOS 输出目录：当前用户的 `~/Desktop` 目录
+- Windows 输出目录：当前用户的 `C:\Users\<用户>\OneDrive\Desktop` 目录
+
+单击输入目录右侧的“浏览…”时，目录选择器会从当前输入目录打开，展示其下的专辑子目录。
 
 例如，当输入目录为：
 
@@ -70,7 +114,7 @@ python main.py
 界面启动后：
 
 1. 在“输入目录”和“输出目录”文本框中直接输入或粘贴路径，或者单击“浏览…”通过系统资源管理器选择目录。
-2. 填写用于筛选一级子目录名称的“文件夹关键字”。
+2. 如需只处理特定专辑，勾选“按文件夹关键词筛选”并填写关键字；不勾选时会处理整个输入目录。
 3. 单击“开始解码”，在进度条和处理日志区域查看执行状态。
 
 解码期间界面会保持响应；为避免文件写入中断，任务完成前不能直接关闭窗口。
@@ -84,6 +128,12 @@ python main.py --cli
 ```
 
 处理日志会同时输出到终端和 `logs/xm_decrypt.log`。如果输入目录、文件夹关键字或匹配文件存在问题，程序会在日志中给出对应提示。
+
+## 测试
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ## 输出结构
 
@@ -101,6 +151,7 @@ OUTPUT_PATH/
 - `main.py`：配置读取、目录筛选、批处理、XM 解密和音频输出。
 - `ui.py`：Tkinter 桌面界面、资源管理器目录选择、进度和日志显示。
 - `logging_config.py`：日志配置。
+- `path_config.py`：跨平台输入、输出和 CloudStation 默认路径解析。
 - `xm_encryptor.wasm`：XM 解密所需的 WebAssembly 模块。
 
 ## 说明

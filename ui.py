@@ -40,6 +40,7 @@ class DecryptApp:
         self.input_var = tk.StringVar(value=default_input)
         self.output_var = tk.StringVar(value=default_output)
         self.keyword_var = tk.StringVar(value=default_keyword)
+        self.keyword_filter_var = tk.BooleanVar(value=bool(default_keyword.strip()))
         self.status_var = tk.StringVar(value="文件总数：0  |  进度：0/0（0.0%）  |  当前文件：等待开始")
         self.progress_var = tk.DoubleVar(value=0)
 
@@ -79,11 +80,15 @@ class DecryptApp:
         self._add_directory_row(container, 2, "输入目录", self.input_var, self._browse_input)
         self._add_directory_row(container, 3, "输出目录", self.output_var, self._browse_output)
 
-        ttk.Label(container, text="文件夹关键字").grid(
-            row=4, column=0, sticky="w", padx=(0, 12), pady=7
-        )
-        keyword_entry = ttk.Entry(container, textvariable=self.keyword_var)
-        keyword_entry.grid(row=4, column=1, columnspan=2, sticky="ew", pady=7)
+        ttk.Checkbutton(
+            container,
+            text="按文件夹关键词筛选",
+            variable=self.keyword_filter_var,
+            command=self._toggle_keyword_filter,
+        ).grid(row=4, column=0, sticky="w", padx=(0, 12), pady=7)
+        self.keyword_entry = ttk.Entry(container, textvariable=self.keyword_var)
+        self.keyword_entry.grid(row=4, column=1, columnspan=2, sticky="ew", pady=7)
+        self._toggle_keyword_filter()
 
         actions = ttk.Frame(container)
         actions.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(16, 10))
@@ -155,6 +160,10 @@ class DecryptApp:
         if selected:
             self.output_var.set(selected)
 
+    def _toggle_keyword_filter(self) -> None:
+        state = "normal" if self.keyword_filter_var.get() else "disabled"
+        self.keyword_entry.configure(state=state)
+
     @staticmethod
     def _initial_directory(value: str) -> str:
         path = Path(value.strip().strip('"')).expanduser() if value.strip() else Path.cwd()
@@ -177,9 +186,10 @@ class DecryptApp:
         if not output_path:
             messagebox.showerror("输入错误", "请选择或填写输出目录。", parent=self.root)
             return
-        if not keyword:
+        if self.keyword_filter_var.get() and not keyword:
             messagebox.showerror("输入错误", "请填写文件夹名称关键字。", parent=self.root)
             return
+        effective_keyword = keyword if self.keyword_filter_var.get() else ""
 
         self.input_var.set(input_path)
         self.output_var.set(output_path)
@@ -196,7 +206,7 @@ class DecryptApp:
 
         self.worker = threading.Thread(
             target=self._run_processing,
-            args=(input_path, output_path, keyword),
+            args=(input_path, output_path, effective_keyword),
             daemon=True,
             name="xm-decrypt-worker",
         )

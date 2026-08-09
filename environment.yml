@@ -1,0 +1,12 @@
+name: ximalaya-xm-decrypt
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - tk
+  - pip:
+      - mutagen
+      - pycryptodome
+      - python-dotenv
+      - wasmtime

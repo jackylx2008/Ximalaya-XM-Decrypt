@@ -1,7 +1,4 @@
 mutagen
 pycryptodome
-wasmer
-python-magic-bin
 python-dotenv
-wasmer_compiler_cranelift
 wasmtime
