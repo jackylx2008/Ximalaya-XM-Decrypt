@@ -1,10 +1,10 @@
 import base64
-import glob
 import io
 import logging
 import os
 import sys
 import traceback
+from pathlib import Path
 
 import magic
 from mutagen import File # type: ignore[attr-defined]
@@ -21,6 +21,8 @@ load_dotenv()
 # 从环境变量获取配置
 XM_KEY = os.getenv("XM_KEY", "ximalayaximalayaximalayaximalaya").encode()
 OUTPUT_PATH = os.getenv("OUTPUT_PATH", "./output")
+INPUT_PATH = os.getenv("INPUT_PATH")
+FOLDER_KEYWORD = os.getenv("FOLDER_KEYWORD", "").strip()
 # 引入日志配置
 logger = setup_logger(log_level=logging.INFO, log_file="./logs/xm_decrypt.log")
 
@@ -223,18 +225,59 @@ def replace_invalid_chars(name):
             name = name.replace(char, " ")
     return name
 
-def main():
-    input_path = os.getenv("INPUT_PATH")
 
-    if not input_path or not os.path.isdir(input_path):
-        logger.error(f"指定的输入目录不存在或未设置: {input_path}")
+def find_matching_directories(input_path, folder_keyword):
+    """查找输入目录下名称包含关键字的一级子目录。"""
+    keyword = folder_keyword.casefold()
+    return sorted(
+        (
+            path
+            for path in Path(input_path).iterdir()
+            if path.is_dir() and keyword in path.name.casefold()
+        ),
+        key=lambda path: path.name.casefold(),
+    )
+
+
+def find_xm_files(directories):
+    """递归收集所有匹配目录中的 .xm 文件。"""
+    return sorted(
+        (
+            file_path
+            for directory in directories
+            for file_path in directory.rglob("*.xm")
+            if file_path.is_file()
+        ),
+        key=lambda path: str(path).casefold(),
+    )
+
+
+def main():
+    if not INPUT_PATH or not os.path.isdir(INPUT_PATH):
+        logger.error(f"指定的输入目录不存在或未设置: {INPUT_PATH}")
         sys.exit(1)
 
-    # 获取所有 .xm 文件，支持子目录递归
-    xm_files = glob.glob(os.path.join(input_path, "**", "*.xm"), recursive=True)
+    if not FOLDER_KEYWORD:
+        logger.error("未设置文件夹关键字 FOLDER_KEYWORD")
+        sys.exit(1)
+
+    matching_directories = find_matching_directories(INPUT_PATH, FOLDER_KEYWORD)
+    if not matching_directories:
+        logger.warning(
+            f"在输入目录 {INPUT_PATH} 下未找到名称包含 "
+            f"'{FOLDER_KEYWORD}' 的文件夹"
+        )
+        sys.exit(0)
+
+    logger.info(
+        f"共找到 {len(matching_directories)} 个匹配文件夹: "
+        + ", ".join(path.name for path in matching_directories)
+    )
+
+    xm_files = find_xm_files(matching_directories)
 
     if not xm_files:
-        logger.warning("未在指定目录中找到 .xm 文件")
+        logger.warning("未在匹配的文件夹中找到 .xm 文件")
         sys.exit(0)
 
     logger.info(f"共找到 {len(xm_files)} 个 .xm 文件，开始解密处理...")
