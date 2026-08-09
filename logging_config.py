@@ -1,59 +1,58 @@
-# ./logging_config.py
+"""项目统一日志配置。"""
+
+from __future__ import annotations
 
 import logging
-import os
 import sys
-
-# 动态添加项目根目录到 sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-
-def setup_logger(log_level=logging.DEBUG, log_file="./logs/app.log"):
-    """
-    设置日志记录器。
-
-    :param log_level: 日志级别，默认为 DEBUG。
-    :param log_file: 日志文件路径，默认为 ./logs/app.log。
-    :return: 配置好的日志记录器。
-    """
-    # 创建日志文件夹
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-
-    # 配置日志格式
-    log_format = "%(asctime)s - %(levelname)s - %(module)s - %(message)s"
-
-    # 设置日志级别
-    logger = logging.getLogger()
-    logger.setLevel(log_level)
-
-    # 避免重复添加处理器
-    if not logger.handlers:
-        # 控制台日志处理器
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter(log_format))
-
-        # 文件日志处理器
-        file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
-        file_handler.setFormatter(logging.Formatter(log_format))
-
-        # 添加处理器
-        logger.addHandler(console_handler)
-        logger.addHandler(file_handler)
-
-    return logger
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 
-# 单独运行时的测试代码
-if __name__ == "__main__":
-    # 示例日志文件路径
-    log_file_path = "./logs/test_logger.log"
+PROJECT_ROOT = Path(__file__).resolve().parent
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 
-    # 初始化日志记录器
-    logger = setup_logger(log_level=logging.INFO, log_file=log_file_path)
 
-    # 测试日志输出
-    logger.debug("This is a DEBUG message.")
-    logger.info("This is an INFO message.")
-    logger.warning("This is a WARNING message.")
-    logger.error("This is an ERROR message.")
-    logger.critical("This is a CRITICAL message.")
+def setup_logger(
+    log_level: int | str = logging.INFO,
+    log_file: str | Path | None = None,
+) -> logging.Logger:
+    """配置根 logger，同时输出到控制台和滚动日志文件。"""
+    level = _coerce_log_level(log_level)
+    entry_name = Path(sys.argv[0]).stem or "app"
+    target = Path(log_file) if log_file else PROJECT_ROOT / "logs" / f"{entry_name}.log"
+    if not target.is_absolute():
+        target = PROJECT_ROOT / target
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    root_logger.handlers.clear()
+
+    formatter = logging.Formatter(LOG_FORMAT)
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    root_logger.addHandler(console)
+
+    file_handler = RotatingFileHandler(
+        target,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+    return root_logger
+
+
+def get_logger(name: str | None = None) -> logging.Logger:
+    """返回使用项目统一 handler 的 logger。"""
+    return logging.getLogger(name)
+
+
+def _coerce_log_level(log_level: int | str) -> int:
+    if isinstance(log_level, int):
+        return log_level
+    level = logging.getLevelName(log_level.upper())
+    if not isinstance(level, int):
+        raise ValueError(f"未知日志级别: {log_level}")
+    return level
