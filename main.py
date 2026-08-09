@@ -4,7 +4,9 @@ import logging
 import os
 import sys
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import magic
 from mutagen import File # type: ignore[attr-defined]
@@ -189,15 +191,15 @@ def find_ext(data):
         raise
 
 
-def decrypt_xm_file(from_file):
+def decrypt_xm_file(from_file, output_path=OUTPUT_PATH):
     try:
         logger.info(f"开始解密文件: {from_file}")
         data = read_file(from_file)
         info, audio_data = xm_decrypt(data)
-        output_dir = f"{OUTPUT_PATH}/{replace_invalid_chars(info.album)}"
+        output_dir = Path(output_path) / replace_invalid_chars(info.album)
         file_name = os.path.splitext(os.path.basename(from_file))[0]
         ext = find_ext(audio_data[:0xFF])
-        output = f"{output_dir}/{file_name}.{ext}"
+        output = output_dir / f"{file_name}.{ext}"
 
         os.makedirs(output_dir, exist_ok=True)
         buffer = io.BytesIO(audio_data)
@@ -252,22 +254,42 @@ def find_xm_files(directories):
     )
 
 
-def main():
-    if not INPUT_PATH or not os.path.isdir(INPUT_PATH):
-        logger.error(f"指定的输入目录不存在或未设置: {INPUT_PATH}")
-        sys.exit(1)
+@dataclass(frozen=True)
+class BatchResult:
+    matching_directories: int
+    total_files: int
+    succeeded: int
+    failed: int
 
-    if not FOLDER_KEYWORD:
-        logger.error("未设置文件夹关键字 FOLDER_KEYWORD")
-        sys.exit(1)
 
-    matching_directories = find_matching_directories(INPUT_PATH, FOLDER_KEYWORD)
+def process_batch(
+    input_path: str | os.PathLike[str],
+    output_path: str | os.PathLike[str],
+    folder_keyword: str,
+    progress_callback: Callable[[int, int, Path, bool | None], None] | None = None,
+) -> BatchResult:
+    """筛选目录并批量解密，可供命令行和图形界面共同调用。"""
+    input_root = Path(input_path).expanduser() if input_path else None
+    if input_root is None or not input_root.is_dir():
+        raise ValueError(f"指定的输入目录不存在或未设置: {input_path}")
+
+    keyword = folder_keyword.strip()
+    if not keyword:
+        raise ValueError("未设置文件夹关键字 FOLDER_KEYWORD")
+
+    if not output_path:
+        raise ValueError("未设置输出目录 OUTPUT_PATH")
+    output_root = Path(output_path).expanduser()
+    if output_root.exists() and not output_root.is_dir():
+        raise ValueError(f"输出路径不是目录: {output_root}")
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    matching_directories = find_matching_directories(input_root, keyword)
     if not matching_directories:
         logger.warning(
-            f"在输入目录 {INPUT_PATH} 下未找到名称包含 "
-            f"'{FOLDER_KEYWORD}' 的文件夹"
+            f"在输入目录 {input_root} 下未找到名称包含 '{keyword}' 的文件夹"
         )
-        sys.exit(0)
+        return BatchResult(0, 0, 0, 0)
 
     logger.info(
         f"共找到 {len(matching_directories)} 个匹配文件夹: "
@@ -275,22 +297,57 @@ def main():
     )
 
     xm_files = find_xm_files(matching_directories)
-
     if not xm_files:
         logger.warning("未在匹配的文件夹中找到 .xm 文件")
-        sys.exit(0)
+        return BatchResult(len(matching_directories), 0, 0, 0)
 
     logger.info(f"共找到 {len(xm_files)} 个 .xm 文件，开始解密处理...")
-
-    for file_path in xm_files:
+    succeeded = 0
+    failed = 0
+    for index, file_path in enumerate(xm_files, start=1):
+        success = False
+        if progress_callback:
+            progress_callback(index - 1, len(xm_files), file_path, None)
         try:
-            decrypt_xm_file(file_path)
-        except Exception as e:
-            logger.error(f"处理文件 {file_path} 时发生错误: {str(e)}")
-            continue
+            decrypt_xm_file(file_path, output_root)
+            succeeded += 1
+            success = True
+        except Exception as exc:
+            failed += 1
+            logger.error(f"处理文件 {file_path} 时发生错误: {exc}")
+        finally:
+            if progress_callback:
+                progress_callback(index, len(xm_files), file_path, success)
 
-    logger.info("所有文件处理完成。")
+    logger.info(f"所有文件处理完成：成功 {succeeded}，失败 {failed}。")
+    return BatchResult(
+        len(matching_directories), len(xm_files), succeeded, failed
+    )
+
+
+def main() -> int:
+    """使用 .env 配置运行命令行批处理。"""
+    try:
+        process_batch(INPUT_PATH or "", OUTPUT_PATH, FOLDER_KEYWORD)
+    except ValueError as exc:
+        logger.error(str(exc))
+        return 1
+    return 0
+
+
+def launch_gui() -> None:
+    """启动桌面图形界面。"""
+    from ui import launch_ui
+
+    launch_ui(
+        process_batch=process_batch,
+        default_input=INPUT_PATH or "",
+        default_output=OUTPUT_PATH,
+        default_keyword=FOLDER_KEYWORD,
+    )
 
 
 if __name__ == "__main__":
-    main()
+    if "--cli" in sys.argv[1:]:
+        raise SystemExit(main())
+    launch_gui()
