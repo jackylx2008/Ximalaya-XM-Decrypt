@@ -16,7 +16,7 @@
 
 ## 环境要求
 
-- Python 3.9 或更高版本
+- Python 3.10 或更高版本
 - `xm_encryptor.wasm` 位于项目根目录
 
 ## 安装
