@@ -21,18 +21,66 @@
 
 ## 安装
 
-推荐使用 Anaconda/Miniconda 创建隔离环境：
+### 项目本地 Conda 环境（推荐）
 
-```bash
-conda env create -f environment.yml
-conda activate ximalaya-xm-decrypt
+项目使用 `environment.yml` 统一 Python 3.12、Tk 和解码依赖。建议在项目根目录创建 `.conda`，使不同项目的依赖互不影响。
+
+Windows 11 PowerShell：
+
+```powershell
+conda env create --prefix .\.conda -f environment.yml
+conda activate .\.conda
+python main.py
 ```
 
-如果环境已经创建，可同步环境配置：
+macOS/Linux：
 
 ```bash
-conda env update -f environment.yml --prune
+conda env create --prefix ./.conda -f environment.yml
+conda activate ./.conda
+python main.py
 ```
+
+如果不想激活环境，可以直接使用环境内的 Python：
+
+```powershell
+# Windows
+.\.conda\python.exe main.py
+```
+
+```bash
+# macOS/Linux
+./.conda/bin/python main.py
+```
+
+环境已经存在时，通过相同的 `environment.yml` 同步依赖：
+
+```bash
+conda env update --prefix ./.conda -f environment.yml --prune
+```
+
+可以通过以下命令检查 Python、Tk 和主要依赖：
+
+```bash
+conda run --prefix ./.conda python --version
+conda run --prefix ./.conda python -c "import tkinter, mutagen, Crypto, dotenv, wasmtime; print('environment OK')"
+```
+
+### 跨平台兼容性说明
+
+- `.conda` 中包含当前操作系统和 CPU 平台对应的二进制文件，不能在 Windows、macOS 和 Linux 之间直接复制使用。
+- `.conda/` 已加入 `.gitignore`；CloudStation 或 Git 只需同步源码、`environment.yml` 和 `requirements.txt`。
+- 在每台新电脑或每个操作系统上进入项目根目录，重新执行对应平台的 `conda env create --prefix ...` 命令。
+- `environment.yml` 由 Conda 安装 Python 3.12 和 Tk，再通过 pip 安装其余跨平台依赖。
+- 输入和输出目录使用各平台自己的 `.env` 配置或程序自动解析的平台默认路径。
+
+如果 PowerShell 无法识别 `conda activate`，先执行下面的命令并重新打开 PowerShell：
+
+```powershell
+conda init powershell
+```
+
+### Python venv 备选方案
 
 也可以使用 Python 自带的虚拟环境：
 
@@ -152,6 +200,8 @@ OUTPUT_PATH/
 - `ui.py`：Tkinter 桌面界面、资源管理器目录选择、进度和日志显示。
 - `logging_config.py`：日志配置。
 - `path_config.py`：跨平台输入、输出和 CloudStation 默认路径解析。
+- `environment.yml`：项目本地 Conda 环境的跨平台依赖定义。
+- `requirements.txt`：不使用 Conda 时的 pip 依赖清单。
 - `xm_encryptor.wasm`：XM 解密所需的 WebAssembly 模块。
 
 ## 说明
