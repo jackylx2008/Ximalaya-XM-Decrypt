@@ -1,8 +1,0 @@
-{
-  "python.terminal.activateEnvironment": true,
-  "code-runner.executorMap": {
-    "python": "conda run --no-capture-output --name ximalaya-xm-decrypt python -u"
-  },
-  "code-runner.fileDirectoryAsCwd": true,
-  "code-runner.ignoreSelection": true
-}
